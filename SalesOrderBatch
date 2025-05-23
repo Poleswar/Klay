@@ -1,0 +1,260 @@
+/**
+     * Netsuite_SalesOrderBatch is a Salesforce batch class responsible for processing sales orders and synchronizing them with the NetSuite system.
+     * The batch follows the Database.Batchable interface, enabling it to handle large volumes of Order records efficiently in batches.
+     * It also implements the Database.AllowsCallouts interface to facilitate callouts to an external endpoint, in this case, the NetSuite Sales Order Endpoint.
+     * 
+     * The main functionality includes:
+     * 1. Retrieving sales order details (like Order Number, status, customer info, etc.) and preparing them for integration with NetSuite.
+     * 2. Retrieving associated Payment Term details and their corresponding line items, ensuring that the data is processed correctly before sending.
+     * 3. Formatting data (e.g., dates, null values) to match the structure required by the NetSuite API.
+     * 4. Packaging data into a Map and List format to make it ready for an HTTP request.
+     * 
+     * Key Methods:
+     * - `start`: Queries Salesforce for Orders based on passed order IDs and returns a query locator for the batch processing.
+     * - `execute`: Processes the batch records, formats data, and sends it to NetSuite's Sales Order API endpoint.
+     * 
+     * Note: The integration includes handling both Order,milestone and milestone line item, with custom mappings for various fields, ensuring that all necessary details are synchronized with NetSuite.
+ 	 
+	 * Author: [Cloud Odyssey (Mandeep)]
+     * Created Date: [01-01-2025]
+*/
+public without sharing class Netsuite_SalesOrderBatch implements Database.Batchable<SObject>, Database.AllowsCallouts {
+
+    private static String ENDPOINT;
+    private static String CLIENT_ASSERTION;
+    private static String ACCESS_TOKEN;
+
+    static {
+        // Retrieve Endpoint and Access Token from the custom object
+        NetSuite_Integration_Data__c config = [SELECT Id, Access_Token__c,Client_Assertion__c, Sales_Order_Endpoint__c 
+                                                FROM NetSuite_Integration_Data__c LIMIT 1];
+        
+        ENDPOINT = config.Sales_Order_Endpoint__c;
+        CLIENT_ASSERTION = config.Client_Assertion__c;
+    }
+
+    private List<Id> orderIds;
+
+    // Constructor to pass order IDs
+    public Netsuite_SalesOrderBatch(List<Id> orderIds) {
+        this.orderIds = orderIds;
+    }
+
+    // Start method
+    public Database.QueryLocator start(Database.BatchableContext BC) {
+        return Database.getQueryLocator([SELECT Id,RecordType.Name, status,OrderNumber, Child_Account__r.Id, Child_Account__r.Netsuite_Customer_Id__c,EffectiveDate,EndDate,Academic_Year1__c,
+                                          Location__c,Date_of_Joining__c,Corporate__r.Id, Corporate__r.Netsuite_Customer_Id__c, Entity__c, RecordType.DeveloperName,Centre__r.Centre_Code__c,
+                                          Primary_Parent2__c,Primary_Mobile_Number__c,Primary_Email_ID__c,Employee_ID__c,Program__c,Sub_Program__c,Infant_Junior_Toddler_Senior_Toddler_Pre__c,Company_Email_ID_for_Corporate_Tie_Ups__c
+                                          FROM Order 
+                                          WHERE Id IN :orderIds]);
+    }
+
+    // Execute method to process each batch of orders
+    public void execute(Database.BatchableContext BC, List<Order> orders) {
+        ACCESS_TOKEN = Netsuite_acccessTokenGenerationCls.getAccessToken(CLIENT_ASSERTION);
+        for (Order orderDetails : orders) {
+            System.debug('Processing Order: ' + orderDetails.Id);
+            Map<String, Object> requestBody = new Map<String, Object>();
+                requestBody.put('orderid', orderDetails.Id);
+                requestBody.put('orderrecordtype', String.isNotBlank(orderDetails.RecordType.Name) ? orderDetails.RecordType.Name : '');
+                requestBody.put('customerID', orderDetails.Child_Account__r.Netsuite_Customer_Id__c);
+                String netsuiteCustomerId = '';
+                if (orderDetails.Corporate__r != null && orderDetails.Corporate__r.Netsuite_Customer_Id__c != null) {
+                    netsuiteCustomerId = orderDetails.Corporate__r.Netsuite_Customer_Id__c;
+                }
+                requestBody.put('Corporate__c', netsuiteCustomerId);
+                requestBody.put('subsidiary', String.isNotBlank(orderDetails.Entity__c) ? orderDetails.Entity__c : 'FYLS');
+            	requestBody.put('date', orderDetails.EffectiveDate != null ? DateTime.newInstance(orderDetails.EffectiveDate, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy') : '');
+                requestBody.put('orderstartdate', orderDetails.EffectiveDate != null ? DateTime.newInstance(orderDetails.EffectiveDate, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy') : '');
+            	requestBody.put('orderenddate', orderDetails.EndDate != null ? DateTime.newInstance(orderDetails.EndDate, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy') : '');
+            	requestBody.put('status', orderDetails.status);
+                requestBody.put('ordernumber', orderDetails.OrderNumber);
+                requestBody.put('academicyear', String.isNotBlank(orderDetails.Academic_Year1__c) ? orderDetails.Academic_Year1__c : '');
+                requestBody.put('dateofjoining', orderDetails.Date_of_Joining__c != null ? DateTime.newInstance(orderDetails.Date_of_Joining__c, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy') : '');
+                requestBody.put('location', String.isNotBlank(orderDetails.Location__c) ? orderDetails.Location__c : '');
+                requestBody.put('center', orderDetails.Centre__r != null && String.isNotBlank(orderDetails.Centre__r.Centre_Code__c) ? orderDetails.Centre__r.Centre_Code__c : '');
+            	requestBody.put('primaryparent', String.isNotBlank(orderDetails.Primary_Parent2__c) ? orderDetails.Primary_Parent2__c : '');
+                requestBody.put('primarymobno', String.isNotBlank(orderDetails.Primary_Mobile_Number__c) ? orderDetails.Primary_Mobile_Number__c : '');
+                requestBody.put('primaryemailid', String.isNotBlank(orderDetails.Primary_Email_ID__c) ? orderDetails.Primary_Email_ID__c : '');
+                requestBody.put('employeeid', String.isNotBlank(orderDetails.Employee_ID__c) ? orderDetails.Employee_ID__c : '');
+                requestBody.put('studentprogram', String.isNotBlank(orderDetails.Program__c) ? orderDetails.Program__c : '');
+                requestBody.put('subprogram', String.isNotBlank(orderDetails.Sub_Program__c) ? orderDetails.Sub_Program__c : '');
+                requestBody.put('classid', String.isNotBlank(orderDetails.Infant_Junior_Toddler_Senior_Toddler_Pre__c) ? orderDetails.Infant_Junior_Toddler_Senior_Toddler_Pre__c : '');
+                requestBody.put('companyemaildcorporate', String.isNotBlank(orderDetails.Company_Email_ID_for_Corporate_Tie_Ups__c) ? orderDetails.Company_Email_ID_for_Corporate_Tie_Ups__c : ''); 
+            /*
+             * if milestone record type is refunded then it should process here......
+             * and inside where condition while retreiving milestones( record type != refund)
+			*/
+            List<Payment_Term__c> milestones = [select Id,Order__r.Id,Name,Milestone_Status__c,Amount_Paid__c,Adjustment__c,Adjustment_Fee_Remarks__c,Entity_Backend__c,Term_Start_Date__c,Term_End_Date__c,Total_Milestone_Amount__c,Total_Annual_Fees__c,
+                                                    Total_Food_Fees__c,Total_Net_Tuition_Fee__c,Total_Other_Fees__c,Other_Fee_Remarks__c,Total_Transport_Fees__c,Application_Form_Fee__c,Klay_CLAPP_Fee__c,Refundable_Deposit__c,Student_Kit_Fees__c,
+                                                    Curriculum_Fee_Corp_Contri__c,Childcare_Fee_Corp_Contri__c,Food_Fees_Corporate_Contri__c,Transport_Fees_Corporate_Contri__c,Klay_CLAPP_Fee_Corp__c,Application_Form_Fee_Corp_Contri__c,Annual_Fee_Corporate_Contri__c,
+                                                    After_School_DC_Admission_Corp_Contri__c,Refundable_Deposit_Corp_Contri__c,After_School_DC_Admission_Fees__c,Student_Kit_Fee_Corp_Contri__c
+                                                    from Payment_Term__c where Order__r.Id =:orderDetails.Id AND RecordType.DeveloperName NOT IN ('Fee_Refunds','RSD_Refund')];
+            system.debug('milestonesList size:'+milestones.size());
+            List<Object> milestoneList  = new List<Object>();
+            for (Payment_Term__c milestone : milestones) {
+                Map<String, Object> milestoneMap  = new Map<String, Object>();
+                    milestoneMap.put('id', milestone.Id);
+                    milestoneMap.put('Name', milestone.Name);
+                    milestoneMap.put('Milestone_Status__c', milestone.Milestone_Status__c);
+                	String amountPaid ='No';
+                    if(milestone.Amount_Paid__c!=Null && milestone.Amount_Paid__c == true){
+                        amountPaid = 'Yes';
+                    }
+                    milestoneMap.put('Amount_Paid__c', amountPaid);
+                    milestoneMap.put('Adjustment__c', milestone.Adjustment__c != null ? milestone.Adjustment__c : 0);
+                    milestoneMap.put('Adjustment_Fee_Remarks__c', String.isNotBlank(milestone.Adjustment_Fee_Remarks__c) ? milestone.Adjustment_Fee_Remarks__c : 'None');
+                    milestoneMap.put('Entity_Backend__c', String.isNotBlank(milestone.Entity_Backend__c) ? milestone.Entity_Backend__c : 'FYLS');
+                	if (milestone.Term_Start_Date__c != null) {
+                        milestoneMap.put('Term_Start_Date__c', DateTime.newInstance(milestone.Term_Start_Date__c, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy'));
+                    } else {
+                        milestoneMap.put('Term_Start_Date__c', '');
+                    }
+                	if (milestone.Term_End_Date__c != null) {
+                        milestoneMap.put('Term_End_Date__c', DateTime.newInstance(milestone.Term_End_Date__c, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy'));
+                    } else {
+                        milestoneMap.put('Term_End_Date__c', '');
+                    }
+                    milestoneMap.put('Total_Milestone_Amount__c', milestone.Total_Milestone_Amount__c != null ? milestone.Total_Milestone_Amount__c : 0);
+                    milestoneMap.put('Total_Annual_Fees__c', milestone.Total_Annual_Fees__c != null ? milestone.Total_Annual_Fees__c : 0);
+                    milestoneMap.put('Total_Food_Fees__c',  milestone.Total_Food_Fees__c != null ? milestone.Total_Food_Fees__c : 0);
+                    milestoneMap.put('Total_Net_Tuition_Fee__c',  milestone.Total_Net_Tuition_Fee__c != null ? milestone.Total_Net_Tuition_Fee__c : 0);
+                    milestoneMap.put('Total_Other_Fees__c',  milestone.Total_Other_Fees__c != null ? milestone.Total_Other_Fees__c : 0);
+                    milestoneMap.put('Other_Fee_Remarks__c', String.isNotBlank(milestone.Other_Fee_Remarks__c) ? milestone.Other_Fee_Remarks__c : 'None');
+                    milestoneMap.put('Total_Transport_Fees__c',  milestone.Total_Transport_Fees__c != null ? milestone.Total_Transport_Fees__c : 0);
+                    milestoneMap.put('Total_Application_Form_Fee__c',milestone.Application_Form_Fee__c != null ? milestone.Application_Form_Fee__c : 0);
+                    milestoneMap.put('Total_Klay_CLAPP_Fee__c', milestone.Klay_CLAPP_Fee__c != null ? milestone.Klay_CLAPP_Fee__c : 0);
+                    milestoneMap.put('Total_Refundable_Deposit__c', milestone.Refundable_Deposit__c != null ? milestone.Refundable_Deposit__c : 0);
+                    milestoneMap.put('Total_After_School_DC_Admission_Fee', milestone.After_School_DC_Admission_Fees__c != null ? milestone.After_School_DC_Admission_Fees__c : 0);
+                    milestoneMap.put('Total_Student_Kit_Fees__c', milestone.Student_Kit_Fees__c != null ? milestone.Student_Kit_Fees__c : 0);
+                    milestoneMap.put('Total_Curriculum_Fee_Corp_Contri__c', milestone.Curriculum_Fee_Corp_Contri__c != null ? milestone.Curriculum_Fee_Corp_Contri__c : 0);
+                    milestoneMap.put('Total_ChildCare_Fee_Corp_Contri__c', milestone.Childcare_Fee_Corp_Contri__c != null ? milestone.Childcare_Fee_Corp_Contri__c : 0);
+                    milestoneMap.put('Total_Food_Fees_Corporate_Contri__c', milestone.Food_Fees_Corporate_Contri__c != null ? milestone.Food_Fees_Corporate_Contri__c : 0);
+                    milestoneMap.put('Total_Transport_Fees_Corporate_Contri__c', milestone.Transport_Fees_Corporate_Contri__c != null ? milestone.Transport_Fees_Corporate_Contri__c : 0);
+                    milestoneMap.put('Total_Klay_CLAPP_Fee_Corporte__c', milestone.Klay_CLAPP_Fee_Corp__c != null ? milestone.Klay_CLAPP_Fee_Corp__c : 0);
+                    milestoneMap.put('Total_Student_Kit_Fee_Corp_Contri__c', milestone.Student_Kit_Fee_Corp_Contri__c != null ? milestone.Student_Kit_Fee_Corp_Contri__c : 0);
+                    milestoneMap.put('Total_Application_Form_Fee_Corp_Contri__c', milestone.Application_Form_Fee_Corp_Contri__c != null ? milestone.Application_Form_Fee_Corp_Contri__c : 0);
+                    milestoneMap.put('Total_Annual_Fee_Corp_Contri__c', milestone.Annual_Fee_Corporate_Contri__c != null ? milestone.Annual_Fee_Corporate_Contri__c : 0);
+                    milestoneMap.put('Total_After_School_DC_Admission_Corp_Contri__c', milestone.After_School_DC_Admission_Corp_Contri__c != null ? milestone.After_School_DC_Admission_Corp_Contri__c : 0);
+                    milestoneMap.put('Total_Refundable_Deposit_Corp_Contri__c', milestone.Refundable_Deposit_Corp_Contri__c != null ? milestone.Refundable_Deposit_Corp_Contri__c : 0);
+                   
+                // Process milestone lines for each milestone
+                List<Object> milestoneLineList = new List<Object>();
+                for (Payment_Term_Line_Item__c milestoneLine : [select id,Payment_Term__c,Name,Term_Line_Item_Start_Date__c,Term_Line_Item_End_Date__c,ActiveX__c,Net_Tuition_Fee__c,Food_Fees__c,Transport_Fees__c,Other_Fee__c,Student_Kit_Fees__c,Application_Form_Fee__c,
+                                                                Klay_CLAPP_Fee__c,Annual_Fee__c,After_School_DC_Admission_Fees__c,Refundable_Deposit__c,Application_Form_Fee_Corp_Contri__c,Klay_CLAPP_Fee_Corporte__c,Annual_Fee_Corp_Contri__c,Student_Kit_Fee_Corp_Contri__c,Refundable_Deposit_Corp_Contri__c,After_School_DC_Admission_Corp_Contri__c,ChildCare_Fee_Corp_Contri__c,
+                                                                Curriculum_Fee_Corp_Contri__c,Food_Fees_Corporate_Contri__c,Transport_Fees_Corporate_Contri__c,Adjustment_for_Current_Month__c,Monthly_Amount__c
+                                                                FROM Payment_Term_Line_Item__c
+                                                                WHERE Payment_Term__r.Id = :milestone.Id]) {   
+                    List<Object> milestoneLines = new List<Object>();
+                    Map<String, Object> milestoneLineMap = new Map<String, Object>();
+                        milestoneLineMap.put('Id', milestoneLine.Id);
+                        milestoneLineMap.put('Term_Line_Item_Name', milestoneLine.Name);
+                        if (milestoneLine.Term_Line_Item_Start_Date__c != null) {
+                        	milestoneLineMap.put('Term_Line_Item_Start_Date__c', DateTime.newInstance(milestoneLine.Term_Line_Item_Start_Date__c, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy'));
+                        } else {
+                            milestoneLineMap.put('Term_Line_Item_Start_Date__c', '');
+                        } 
+                        if (milestoneLine.Term_Line_Item_End_Date__c != null) {
+                        	milestoneLineMap.put('Term_Line_Item_End_Date__c', DateTime.newInstance(milestoneLine.Term_Line_Item_End_Date__c, Time.newInstance(0, 0, 0, 0)).format('dd/MM/yyyy'));
+                        } else {
+                            milestoneLineMap.put('Term_Line_Item_End_Date__c', '');
+                        }
+                        String isActiveLineItem ='No';
+                        if(milestoneLine.ActiveX__c != Null && milestoneLine.ActiveX__c == true){
+                            isActiveLineItem = 'Yes';
+                        }
+                        milestoneLineMap.put('ActiveX__c', isActiveLineItem);
+                        milestoneLineMap.put('Net_Tuition_Fee__c', milestoneLine.Net_Tuition_Fee__c != null ? milestoneLine.Net_Tuition_Fee__c : 0);
+                        milestoneLineMap.put('Food_Fees__c', milestoneLine.Food_Fees__c != null ? milestoneLine.Food_Fees__c : 0);
+                        milestoneLineMap.put('Transport_Fees__c', milestoneLine.Transport_Fees__c != null ? milestoneLine.Transport_Fees__c : 0);
+                        milestoneLineMap.put('Other_Fee__c', milestoneLine.Other_Fee__c != null ? milestoneLine.Other_Fee__c : 0);
+                        milestoneLineMap.put('Student_Kit_Fees__c', milestoneLine.Student_Kit_Fees__c != null ? milestoneLine.Student_Kit_Fees__c : 0);
+                        milestoneLineMap.put('Application_Form_Fee__c', milestoneLine.Application_Form_Fee__c != null ? milestoneLine.Application_Form_Fee__c : 0);
+                        milestoneLineMap.put('Klay_CLAPP_Fee__c', milestoneLine.Klay_CLAPP_Fee__c != null ? milestoneLine.Klay_CLAPP_Fee__c : 0);
+                        milestoneLineMap.put('Annual_Fee__cc', milestoneLine.Annual_Fee__c != null ? milestoneLine.Annual_Fee__c : 0);
+                        milestoneLineMap.put('After_School_DC_Admission_Fees__c', milestoneLine.After_School_DC_Admission_Fees__c != null ? milestoneLine.After_School_DC_Admission_Fees__c : 0);
+                        milestoneLineMap.put('Refundable_Deposit__c', milestoneLine.Refundable_Deposit__c != null ? milestoneLine.Refundable_Deposit__c : 0);
+                        milestoneLineMap.put('Application_Form_Fee_Corp_Contri__c', milestoneLine.Application_Form_Fee_Corp_Contri__c != null ? milestoneLine.Application_Form_Fee_Corp_Contri__c : 0);
+                        milestoneLineMap.put('Klay_CLAPP_Fee_Corporte__c', milestoneLine.Klay_CLAPP_Fee_Corporte__c != null ? milestoneLine.Klay_CLAPP_Fee_Corporte__c : 0);
+                        milestoneLineMap.put('Annual_Fee_Corp_Contri__c', milestoneLine.Annual_Fee_Corp_Contri__c != null ? milestoneLine.Annual_Fee_Corp_Contri__c : 0);
+                        milestoneLineMap.put('Student_Kit_Fee_Corp_Contri__c',milestoneLine.Student_Kit_Fee_Corp_Contri__c != null ? milestoneLine.Student_Kit_Fee_Corp_Contri__c : 0);
+                        milestoneLineMap.put('Refundable_Deposit_Corp_Contri__c', milestoneLine.Refundable_Deposit_Corp_Contri__c != null ? milestoneLine.Refundable_Deposit_Corp_Contri__c : 0);
+                        milestoneLineMap.put('After_School_DC_Admission_Corp_Contri__c', milestoneLine.After_School_DC_Admission_Corp_Contri__c != null ? milestoneLine.After_School_DC_Admission_Corp_Contri__c : 0);
+                        milestoneLineMap.put('ChildCare_Fee_Corp_Contri__c', milestoneLine.ChildCare_Fee_Corp_Contri__c != null ? milestoneLine.ChildCare_Fee_Corp_Contri__c : 0);
+                        milestoneLineMap.put('Curriculum_Fee_Corp_Contri__c', milestoneLine.Curriculum_Fee_Corp_Contri__c != null ? milestoneLine.Curriculum_Fee_Corp_Contri__c : 0);
+                        milestoneLineMap.put('Food_Fees_Corporate_Contri__c', milestoneLine.Food_Fees_Corporate_Contri__c != null ? milestoneLine.Food_Fees_Corporate_Contri__c : 0);
+                        milestoneLineMap.put('Transport_Fees_Corporate_Contri__c', milestoneLine.Transport_Fees_Corporate_Contri__c != null ? milestoneLine.Transport_Fees_Corporate_Contri__c : 0);
+                        milestoneLineMap.put('Adjustment_for_current_month', milestoneLine.Adjustment_for_Current_Month__c != null ? milestoneLine.Adjustment_for_Current_Month__c : 0);
+                       	milestoneLineMap.put('Total_standard_amount', milestoneLine.Monthly_Amount__c != null ? milestoneLine.Monthly_Amount__c : 0);
+                    milestoneLineList.add(milestoneLineMap);
+                }
+                
+                milestoneMap.put('milestoneline', milestoneLineList);
+                milestoneList .add(milestoneMap);
+            }
+            requestBody.put('milestone', milestoneList );
+            System.debug('Request Body:'+requestBody);
+            // Make the HTTP request
+            if(!Test.isRunningTest()){
+                sendHttpRequest(requestBody,orderDetails.Id);
+            }
+        }
+    }
+
+    // Finish method
+    public void finish(Database.BatchableContext BC) {
+        System.debug('Batch processing complete.');
+    }
+
+    // Helper method for callout
+    public static void sendHttpRequest(Map<String, Object> body,String orderId) {
+        System.debug('ENDPOINT:'+ENDPOINT);
+        System.debug('CLIENT_ASSERTION:'+CLIENT_ASSERTION);
+        String accessToken = ACCESS_TOKEN;
+        String authToken = 'Bearer ' + accessToken;
+        Http http = new Http();
+        HttpRequest request = new HttpRequest();
+        request.setEndpoint(ENDPOINT); 
+        request.setMethod('POST');
+        request.setHeader('Content-Type', 'application/json');
+        request.setHeader('Authorization', authToken);
+        request.setTimeout(60000); 
+        
+        String bodyJSON = JSON.serialize(body);
+        request.setBody(bodyJSON);
+        
+        try {
+            HttpResponse response = http.send(request);
+            if (response.getStatusCode() == 200 || response.getStatusCode() == 201) {
+                // Check for Order UpdatedID or CreatedID
+                String responseBody = response.getBody();
+                Map<String, Object> responseMap = (Map<String, Object>) JSON.deserializeUntyped(responseBody);
+                String netsuiteOrderId = responseMap.containsKey('updatedID') ? String.valueOf(responseMap.get('updatedID')) :
+                                    (responseMap.containsKey('createdID') ? String.valueOf(responseMap.get('createdID')) : null);
+                System.debug('Netsuite Order Id :' + netsuiteOrderId);
+                DBLogsHandler.createLogRecord(request.getBody(), response.getBody(), 'NetSuite', 'Success', 'Netsuite_SalesOrderCls');
+                if(netsuiteOrderId != Null && orderId != Null){
+                    system.debug('orderId :'+orderId);
+                    Order orderToUpdate = [ Select id,Netsuite_Order_Id__c from Order where id=:orderId];
+                    	if (orderToUpdate.Netsuite_Order_Id__c == null) {
+                            orderToUpdate.Netsuite_Order_Id__c = netsuiteOrderId;
+                            try {
+                                system.debug('Going to update :'+orderId);
+                                update orderToUpdate;
+                            } catch (Exception ex) {
+                                System.debug('Failed to update Order: ' + ex.getMessage());
+	                                DBLogsHandler.createLogRecord(request.getBody(), ex.getMessage(), 'NetSuite', 'Failure', 'Netsuite_SalesOrder_Update');
+                            }
+                        }
+                }
+            } else {
+                System.debug('Failed with status code: ' + response.getStatusCode());
+                System.debug('Response: ' + response.getBody());
+                DBLogsHandler.createLogRecord(request.getBody(), response.getBody(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderCls');
+            }
+        } catch (System.CalloutException e) {
+            System.debug('Callout error: ' + e.getMessage());
+            DBLogsHandler.createLogRecord(request.getBody(),  e.getMessage(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderCls');
+        }
+    }
+}
