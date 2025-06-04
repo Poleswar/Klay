@@ -14,7 +14,9 @@
      * API endpoint using an HTTP callout.
      * 
      * Note: The integration includes handling both Order,milestone and milestone line item, with custom mappings for various fields, ensuring that all necessary details are synchronized with NetSuite.
-
+ 	 
+	 * Author: [Cloud Odyssey (Eswar)]
+     * Created Date: [13-05-2025]
      * Purpose: This classes created as Netsuite_salesOrderBatch getting issue with bulk update operation. So Batch class converted to Queue
      * 
 */
@@ -71,6 +73,7 @@ public with sharing class Netsuite_SalesOrderQueueable implements Queueable, Dat
                               FROM Order 
                               WHERE Id IN :orderIds];
         ACCESS_TOKEN = Netsuite_acccessTokenGenerationCls.getAccessToken(CLIENT_ASSERTION);
+        system.debug('ACCESS_TOKEN&&&&&&& line-no:76'+ACCESS_TOKEN);
         for (Order orderDetails : orders) {
             System.debug('Processing Order: ' + orderDetails.Id);
             Map<String, Object> requestBody = new Map<String, Object>();
@@ -227,6 +230,7 @@ public with sharing class Netsuite_SalesOrderQueueable implements Queueable, Dat
         HttpRequest request = new HttpRequest();
         request.setEndpoint(ENDPOINT); 
         request.setMethod('POST');
+       // request.setHeader('Name','orderId');
         request.setHeader('Content-Type', 'application/json');
         request.setHeader('Authorization', authToken);
         request.setTimeout(60000); 
@@ -240,7 +244,7 @@ public with sharing class Netsuite_SalesOrderQueueable implements Queueable, Dat
                 Map<String, Object> responseMap = (Map<String, Object>) JSON.deserializeUntyped(response.getBody());
                 String netsuiteOrderId = responseMap.containsKey('updatedID') ? String.valueOf(responseMap.get('updatedID')) :
                 (responseMap.containsKey('createdID') ? String.valueOf(responseMap.get('createdID')) : null);
-                    DBLogsHandler.createLogRecord(request.getBody(), response.getBody(), 'NetSuite', 'Success', 'Netsuite_SalesOrderCls');
+                    DBLogsHandler.createLogRecord(request.getBody(), response.getBody(), 'NetSuite', 'Success', 'Netsuite_SalesOrderQueueable');
                 
                 if (netsuiteOrderId != null && orderId != null) {
                     Order orderToUpdate = [SELECT Id, Netsuite_Order_Id__c FROM Order WHERE Id = :orderId];
@@ -249,15 +253,15 @@ public with sharing class Netsuite_SalesOrderQueueable implements Queueable, Dat
                         try {
                             update orderToUpdate;
                         } catch (Exception ex) {
-                            DBLogsHandler.createLogRecord(request.getBody(), ex.getMessage(), 'NetSuite', 'Failure', 'Netsuite_SalesOrder_Update');
+                            DBLogsHandler.createLogRecord(request.getBody(), ex.getMessage(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderQueueable_update');
                         }
                     }
                 }
             } else {
-                DBLogsHandler.createLogRecord(request.getBody(), response.getBody(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderCls');
+                DBLogsHandler.createLogRecord(request.getBody(), response.getBody(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderQueueable');
             }
         } catch (System.CalloutException e) {
-            DBLogsHandler.createLogRecord(request.getBody(), e.getMessage(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderCls');
+            DBLogsHandler.createLogRecord(request.getBody(), e.getMessage(), 'NetSuite', 'Failure', 'Netsuite_SalesOrderQueueable');
         }
         
     }
